@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Burger Quest — A $BURGERS Adventure</title>
+<style>
+  :root{
+    --bun:#e8a33d;
+    --coinbase:#0052ff;
+    --green-up:#22c55e;
+    --red-down:#ef4444;
+    --bg:#0b0e14;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    background:radial-gradient(1200px 600px at 50% -10%, #16203a 0%, var(--bg) 60%);
+    color:#f5f0e6;
+    font-family:'Fredoka','Segoe UI',system-ui,sans-serif;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    min-height:100%;
+    touch-action:manipulation;
+    -webkit-user-select:none;user-select:none;
+    overflow:hidden;
+  }
+  h1{
+    font-size:clamp(20px,4vw,32px);
+    letter-spacing:1px;
+    margin:10px 0 2px;
+    text-shadow:0 0 18px rgba(232,163,61,.55);
+  }
+  h1 .b{color:var(--bun);}
+  .sub{
+    font-size:clamp(11px,2vw,14px);
+    opacity:.75;margin-bottom:10px;text-align:center;padding:0 12px;
+  }
+  .sub b{color:var(--green-up);}
+  #wrap{
+    position:relative;
+    border:3px solid #2a3350;
+    border-radius:10px;
+    box-shadow:0 0 0 2px #000, 0 0 40px rgba(0,82,255,.25), 0 0 80px rgba(232,163,61,.12);
+    background:#000;
+    line-height:0;
+  }
+  canvas{
+    image-rendering:pixelated;
+    image-rendering:crisp-edges;
+    display:block;
+    border-radius:7px;
+  }
+  .keys{
+    margin-top:10px;font-size:12px;opacity:.65;text-align:center;padding:0 12px;
+  }
+  kbd{
+    background:#1c2438;border:1px solid #34406b;border-radius:5px;
+    padding:1px 6px;font-family:inherit;font-size:11px;
+  }
+  /* touch controls */
+  #touch{position:fixed;inset:0;pointer-events:none;display:none;z-index:5;}
+  body.touch #touch{display:block;}
+  .pad{position:absolute;bottom:18px;left:16px;width:132px;height:132px;pointer-events:auto;}
+  .pad button, #btnA, #btnW{
+    pointer-events:auto;
+    background:rgba(30,38,64,.75);
+    border:2px solid #3a4674;
+    color:#f5f0e6;border-radius:12px;
+    font-family:inherit;font-weight:600;
+    -webkit-tap-highlight-color:transparent;
+  }
+  .pad button{position:absolute;width:44px;height:44px;font-size:18px;}
+  .pad .u{left:44px;top:0;} .pad .d{left:44px;bottom:0;}
+  .pad .l{left:0;top:44px;} .pad .r{right:0;top:44px;}
+  #btnA{
+    position:absolute;bottom:34px;right:22px;width:64px;height:64px;border-radius:50%;
+    font-size:16px;color:var(--bun);border-color:var(--bun);
+    box-shadow:0 0 16px rgba(232,163,61,.35);
+  }
+  #btnW{
+    position:absolute;bottom:112px;right:30px;width:48px;height:36px;border-radius:10px;
+    font-size:11px;color:#7db4ff;border-color:#3560c9;
+  }
+  .pad button:active,#btnA:active,#btnW:active{background:rgba(0,82,255,.5);}
+</style>
+</head>
+<body>
+<h1>🍔 BURGER QUEST <span class="b">· $BURGERS</span></h1>
+<div class="sub">Buy real <b>$BURGERS</b> in the Bun Bazaar — swaps route through the live pool, right from the shop counter. 100% to charity, always.</div>
+<div id="wrap"><canvas id="cv" width="480" height="352"></canvas></div>
+<div class="keys">Move <kbd>WASD</kbd>/<kbd>↑↓←→</kbd> · Talk / Buy / Flip <kbd>Space</kbd>/<kbd>Z</kbd> · Wallet <kbd>C</kbd> · Restart <kbd>Enter</kbd></div>
+
+<div id="touch">
+  <div class="pad">
+    <button class="u" data-k="up">▲</button>
+    <button class="l" data-k="left">◀</button>
+    <button class="r" data-k="right">▶</button>
+    <button class="d" data-k="down">▼</button>
+  </div>
+  <button id="btnW" data-k="wallet">💳</button>
+  <button id="btnA" data-k="attack">A</button>
+</div>
+
+<script>
+(function(){
+"use strict";
+/* ============================== CHAIN / SWAP CONFIG ============================== */
+const BURGERS   = "0x06A05043eb2C1691b19c2C13219dB9212269dDc5";
+const WETH      = "0x4200000000000000000000000000000000000006";
+const NATIVE    = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE";   // Kyber native-ETH sentinel
+const KYBER     = "https://aggregator-api.kyberswap.com/base/api/v1";
+const CLIENT_ID = "burgermoney";
+const BASE_CHAIN_HEX = "0x2105"; // 8453
+const BASE_PARAMS = {
+  chainId: BASE_CHAIN_HEX,
+  chainName: "Base",
+  nativeCurrency: { name:"Ether", symbol:"ETH", decimals:18 },
+  rpcUrls: ["https://mainnet.base.org"],
+  blockExplorerUrls: ["https://basescan.org"]
+};
+const SLIPPAGE_BPS = 500;   // 5% — small pool, keeps swaps from reverting
+
+function uniswapURL(ethAmount){   // safety-net fallback only
+  return "https://app.uniswap.org/swap?chain=base&inputCurrency=NATIVE"
+       + "&outputCurrency=" + BURGERS + "&value=" + ethAmount + "&field=input";
+}
+
+// shop inventory — 3 tables, ALttP style
+const SHOP_ITEMS = [
+  { name:"THE BITE",        eth:"0.005", wei:"5000000000000000",   blurb:"A humble first taste of the Bun Kingdom." },
+  { name:"THE COMBO MEAL",  eth:"0.02",  wei:"20000000000000000",  blurb:"The classic order. Feeds the flywheel." },
+  { name:"THE WHALE FEAST", eth:"0.1",   wei:"100000000000000000", blurb:"A legendary portion. The griddle trembles." },
+];
+
+/* ============================== LIVE PRICE (banner) ============================== */
+let priceBurgUsd=null, priceEthUsd=null;
+fetch("https://api.geckoterminal.com/api/v2/simple/networks/base/token_price/"+BURGERS+","+WETH)
+  .then(r=>r.json()).then(j=>{
+    const p=j&&j.data&&j.data.attributes&&j.data.attributes.token_prices;
+    if(!p) return;
+    const b=parseFloat(p[BURGERS.toLowerCase()]), e=parseFloat(p[WETH.toLowerCase()]);
+    if(b>0) priceBurgUsd=b; if(e>0) priceEthUsd=e;
+  }).catch(()=>{});
+function fmtTokens(n){
+  if(n>=1e9) return (n/1e9).toFixed(2)+"B";
+  if(n>=1e6) return (n/1e6).toFixed(2)+"M";
+  if(n>=1e3) return (n/1e3).toFixed(1)+"K";
+  return n.toFixed(0);
+}
+function estTokensGecko(ethAmt){
+  if(!priceBurgUsd||!priceEthUsd) return null;
+  return (parseFloat(ethAmt)*priceEthUsd)/priceBurgUsd;
+}
+
+/* ============================== WALLET (EIP-6963) ============================== */
+const W = { providers:[], provider:null, name:null, account:null,
+            balanceWei:null, chainOk:false };
+
+window.addEventListener("eip6963:announceProvider", (ev)=>{
+  const d=ev.detail;
+  if(!d||!d.provider) return;
+  if(W.providers.some(p=>p.info&&d.info&&p.info.uuid===d.info.uuid)) return;
+  W.providers.push(d);
+});
+window.dispatchEvent(new Event("eip6963:requestProvider"));
+setTimeout(()=>{ // legacy fallback
+  if(W.providers.length===0 && window.ethereum){
+    W.providers.push({info:{name:"Browser Wallet", uuid:"legacy"}, provider:window.ethereum});
+  }
+},600);
+
+function shortAddr(a){ return a ? a.slice(0,6)+"…"+a.slice(-4) : ""; }
+function fmtEth(wei){
+  if(wei==null) return "";
+  try{ return (Number(wei/1000000000000n)/1e6).toFixed(4); }catch(e){ return ""; }
+}
+
+async function ensureBase(provider){
+  const cid = await provider.request({method:"eth_chainId"});
+  if(cid===BASE_CHAIN_HEX) return true;
+  try{
+    await provider.request({method:"wallet_switchEthereumChain", params:[{chainId:BASE_CHAIN_HEX}]});
+    return true;
+  }catch(err){
+    if(err && (err.code===4902 || (err.data&&err.data.originalError&&err.data.originalError.code===4902))){
+      await provider.request({method:"wallet_addEthereumChain", params:[BASE_PARAMS]});
+      return true;
+    }
+    throw err;
+  }
+}
+async function refreshBalance(){
+  if(!W.provider||!W.account) return;
+  try{
+    const hex = await W.provider.request({method:"eth_getBalance", params:[W.account,"latest"]});
+    W.balanceWei = BigInt(hex);
+  }catch(e){}
+}
+async function connectWith(entry){
+  const provider = entry.provider;
+  const accounts = await provider.request({method:"eth_requestAccounts"});
+  if(!accounts||!accounts.length) throw new Error("No account");
+  await ensureBase(provider);
+  W.provider=provider; W.name=(entry.info&&entry.info.name)||"Wallet";
+  W.account=accounts[0]; W.chainOk=true;
+  await refreshBalance();
+  provider.on && provider.on("accountsChanged",(a)=>{
+    W.account=(a&&a[0])||null;
+    if(!W.account){ W.provider=null; W.balanceWei=null; }
+    else refreshBalance();
+  });
+  provider.on && provider.on("chainChanged",(cid)=>{ W.chainOk = (cid===BASE_CHAIN_HEX); });
+}
+
+/* ============================== KYBER SWAP FLOW ============================== */
+async function kyberQuote(amountInWei){
+  const url = KYBER+"/routes?tokenIn="+NATIVE+"&tokenOut="+BURGERS+"&amountIn="+amountInWei;
+  const r = await fetch(url, {headers:{"x-client-id":CLIENT_ID}});
+  const j = await r.json();
+  if(!j || j.code!==0 || !j.data || !j.data.routeSummary) throw new Error((j&&j.message)||"No route");
+  return j.data;   // { routeSummary, routerAddress }
+}
+async function kyberBuild(routeSummary, sender){
+  const r = await fetch(KYBER+"/route/build", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","x-client-id":CLIENT_ID},
+    body: JSON.stringify({
+      routeSummary,
+      sender, recipient: sender,
+      slippageTolerance: SLIPPAGE_BPS,
+      deadline: Math.floor(Date.now()/1000)+1200,
+      source: CLIENT_ID
+    })
+  });
+  const j = await r.json();
+  if(!j || j.code!==0 || !j.data || !j.data.data) throw new Error((j&&j.message)||"Build failed");
+  return j.data;   // { data, routerAddress, ... }
+}
+function toHexWei(decStr){ return "0x"+BigInt(decStr).toString(16); }
+
+async function waitReceipt(txHash){
+  for(let i=0;i<45;i++){
+    await new Promise(res=>setTimeout(res,3000));
+    try{
+      const rec = await W.provider.request({method:"eth_getTransactionReceipt", params:[txHash]});
+      if(rec) return rec;
+    }catch(e){}
+  }
+  return null;
+}
+
+/* ============================== GAME SETUP ============================== */
+const cv = document.getElementById('cv');
+const ctx = cv.getContext('2d');
+const T=16, HUD_H=32, VW=480, VH=320, WMW=48, WMH=36;
+
+function fit(){
+  const pad=28;
+  const availW=Math.min(window.innerWidth-pad,960);
+  const availH=window.innerHeight-170;
+  const s=Math.max(1,Math.min(availW/480,availH/352));
+  cv.style.width=Math.floor(480*s)+'px';
+  cv.style.height=Math.floor(352*s)+'px';
+}
+window.addEventListener('resize',fit); fit();
+
+let seed=0xBEEF;
+function rnd(){ seed=(seed*1103515245+12345)&0x7fffffff; return seed/0x7fffffff; }
+
+/* Tiles: 0 grass 1 tree 2 water 3 path 4 bush 5 stone 6 doorLocked 7 doorOpen
+   8 shrineFloor 9 flower 10 shopDoor 11 woodWall
+   12 shopFloor 13 shopWall 14 counter 15 rug 16 table 17 torchWall */
+const SOLID = t => t===1||t===2||t===5||t===6||t===11||t===13||t===14||t===16||t===17;
+
+let worldMap=[], shopMap=[], map, MW, MH;
+
+function buildWorld(){
+  seed=0xBEEF; worldMap=[];
+  for(let y=0;y<WMH;y++){ worldMap.push(new Array(WMW).fill(0)); }
+  const m=worldMap;
+  for(let x=0;x<WMW;x++){ m[0][x]=1;m[1][x]=1;m[WMH-1][x]=1;m[WMH-2][x]=1; }
+  for(let y=0;y<WMH;y++){ m[y][0]=1;m[y][1]=1;m[y][WMW-2]=1;m[y][WMW-1]=1; }
+  for(let y=24;y<31;y++) for(let x=6;x<16;x++){
+    const edge=(y===24||y===30||x===6||x===15);
+    m[y][x]=2; if(edge&&rnd()<.3) m[y][x]=0;
+  }
+  for(let x=2;x<WMW-2;x++) m[18][x]=3;
+  for(let y=2;y<WMH-2;y++) m[y][24]=3;
+  const sx=21,sy=3;
+  for(let y=sy;y<sy+5;y++) for(let x=sx;x<sx+7;x++) m[y][x]=5;
+  for(let y=sy+1;y<sy+4;y++) for(let x=sx+1;x<sx+6;x++) m[y][x]=8;
+  m[sy+4][sx+3]=6;
+  for(let y=12;y<16;y++) for(let x=29;x<35;x++) m[y][x]=11;
+  m[15][31]=10; m[16][31]=3; m[17][31]=3;
+  for(let i=0;i<95;i++){
+    const x=2+Math.floor(rnd()*(WMW-4)), y=2+Math.floor(rnd()*(WMH-4));
+    if(m[y][x]!==0) continue;
+    if(Math.abs(y-18)<2||Math.abs(x-24)<2) continue;
+    if(x>=27&&x<=36&&y>=10&&y<=18) continue;
+    const r=rnd();
+    if(r<.38) m[y][x]=1; else if(r<.82) m[y][x]=4; else m[y][x]=9;
+  }
+  for(let y=19;y<23;y++) for(let x=22;x<27;x++) if(m[y][x]!==3) m[y][x]=0;
+}
+
+function buildShop(){
+  // 30 x 20 = exactly one screen — dark stone walls, warm checkered floor,
+  // counter up top, three little display tables, rug running to the door.
+  const F=12, Wl=13, C=14, R=15, Tb=16, Tk=17;
+  shopMap=[];
+  for(let y=0;y<20;y++) shopMap.push(new Array(30).fill(F));
+  for(let x=0;x<30;x++){ shopMap[0][x]=Wl; shopMap[1][x]=Wl; shopMap[2][x]=Wl; shopMap[18][x]=Wl; shopMap[19][x]=Wl; }
+  for(let y=0;y<20;y++){ shopMap[y][0]=Wl; shopMap[y][1]=Wl; shopMap[y][28]=Wl; shopMap[y][29]=Wl; }
+  // torches on back wall
+  shopMap[2][6]=Tk; shopMap[2][11]=Tk; shopMap[2][18]=Tk; shopMap[2][23]=Tk;
+  // counter
+  for(let x=10;x<20;x++) shopMap[5][x]=C;
+  // display tables
+  shopMap[10][7]=Tb; shopMap[10][14]=Tb; shopMap[10][21]=Tb;
+  // rug + exit gap through bottom wall
+  shopMap[16][14]=R; shopMap[16][15]=R;
+  shopMap[17][14]=R; shopMap[17][15]=R;
+  shopMap[18][14]=R; shopMap[18][15]=R;
+  shopMap[19][14]=R; shopMap[19][15]=R;
+}
+
+/* ============================== STATE ============================== */
+const COIN_GOAL=25;
+let player,bears,drops,sparks,msgs,state,tick,shakeT,winT;
+let scene,dialog,dialogId=0,txBusy=false;
+
+function reset(){
+  if(txBusy) return;                       // never restart mid-purchase
+  buildWorld(); buildShop();
+  // ***** game begins INSIDE the shop *****
+  map=shopMap; MW=30; MH=20; scene='shop';
+  dialog=null;
+  tick=0; shakeT=0; winT=0;
+  player={x:14.5*T, y:14*T, w:12, h:12, dir:0, f:0, hp:6, maxhp:6,
+          coins:0, inv:0, atk:0, moving:false};
+  drops=[]; sparks=[]; msgs=[];
+  bears=[];
+  const spots=[[8,8],[38,8],[10,20],[38,26],[20,30],[33,20],[14,14],[30,29]];
+  for(const [tx,ty] of spots){
+    if(SOLID(worldMap[ty][tx])||worldMap[ty][tx]===10) worldMap[ty][tx]=0;
+    bears.push({x:tx*T,y:ty*T,w:13,h:13,hp:2,dir:Math.floor(Math.random()*4),
+                t:0,hurt:0,kx:0,ky:0});
+  }
+  state='play';
+  toast("Welcome to the BUN BAZAAR! Real $BURGERS inside.");
+}
+function toast(text){ msgs.push({text,t:200}); }
+
+function exitShop(){
+  scene='world'; map=worldMap; MW=WMW; MH=WMH;
+  player.x=31*T+2; player.y=16*T+2; player.dir=2;
+  sDoor();
+  toast("Find "+COIN_GOAL+" $BURGERS to open the shrine!");
+}
+function enterShop(){
+  scene='shop'; map=shopMap; MW=30; MH=20;
+  player.x=14.5*T; player.y=15*T; player.dir=0;
+  sDoor();
+}
+
+/* ============================== INPUT ============================== */
+const keys={};
+const KEYMAP={ArrowUp:'up',KeyW:'up',ArrowDown:'down',KeyS:'down',
+              ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right',
+              Space:'attack',KeyZ:'attack',Enter:'enter',Escape:'esc',KeyC:'wallet'};
+window.addEventListener('keydown',e=>{
+  const k=KEYMAP[e.code]; if(!k) return;
+  e.preventDefault(); unlockAudio();
+  if(dialog){ dialogKey(k); return; }
+  if(!keys[k] && k==='attack') doAction();
+  if(k==='wallet') openWalletDialog();
+  if(k==='enter' && state!=='play') reset();
+  keys[k]=true;
+});
+window.addEventListener('keyup',e=>{ const k=KEYMAP[e.code]; if(k) keys[k]=false; });
+
+if('ontouchstart' in window){ document.body.classList.add('touch'); }
+document.querySelectorAll('[data-k]').forEach(el=>{
+  const k=el.dataset.k;
+  const on=e=>{e.preventDefault(); unlockAudio();
+    if(dialog){ dialogKey(k==='wallet'?'esc':k); return; }
+    if(state!=='play'){ reset(); return; }
+    if(k==='attack') doAction();
+    else if(k==='wallet') openWalletDialog();
+    else keys[k]=true;};
+  const off=e=>{e.preventDefault(); if(k!=='attack'&&k!=='wallet') keys[k]=false;};
+  el.addEventListener('touchstart',on,{passive:false});
+  el.addEventListener('touchend',off,{passive:false});
+  el.addEventListener('touchcancel',off,{passive:false});
+});
+cv.addEventListener('pointerdown',()=>{ unlockAudio(); if(!dialog && state!=='play') reset(); });
+
+/* ============================== DIALOG SYSTEM ============================== */
+function openDialog(lines, options, action, busy){
+  dialogId++;
+  dialog={id:dialogId, lines, options:options||[], sel:0, action, busy:!!busy};
+  sTalk();
+  return dialog.id;
+}
+function updateDialog(id, lines, options, action, busy){
+  if(!dialog || dialog.id!==id) return false;
+  dialog.lines=lines;
+  if(options){ dialog.options=options; dialog.sel=0; }
+  if(action!==undefined) dialog.action=action;
+  dialog.busy=!!busy;
+  return true;
+}
+function closeDialog(){ dialog=null; }
+function dialogKey(k){
+  if(!dialog || dialog.busy) return;
+  const vertical = dialog.options.length>2;
+  if(!vertical){
+    if(k==='left'&&dialog.sel>0){dialog.sel--;sBlip();}
+    if(k==='right'&&dialog.sel<dialog.options.length-1){dialog.sel++;sBlip();}
+  } else {
+    if(k==='up'&&dialog.sel>0){dialog.sel--;sBlip();}
+    if(k==='down'&&dialog.sel<dialog.options.length-1){dialog.sel++;sBlip();}
+  }
+  if(k==='esc'){ closeDialog(); sBlip(); return; }
+  if(k==='attack'||k==='enter'){
+    const choice=dialog.options[dialog.sel];
+    const act=dialog.action;
+    closeDialog();
+    if(act) act(choice);
+  }
+}
+
+/* ============================== AUDIO ============================== */
+let AC=null;
+function unlockAudio(){ if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} } if(AC&&AC.state==='suspended') AC.resume(); }
+function beep(f,d,t,v,s){
+  if(!AC) return;
+  const o=AC.createOscillator(),g=AC.createGain();
+  o.type=t||'square'; o.frequency.value=f;
+  if(s) o.frequency.exponentialRampToValueAtTime(s,AC.currentTime+d);
+  g.gain.value=v||.05;
+  g.gain.exponentialRampToValueAtTime(.0001,AC.currentTime+d);
+  o.connect(g); g.connect(AC.destination);
+  o.start(); o.stop(AC.currentTime+d);
+}
+const sCoin =()=>{beep(988,.09,'square',.05);setTimeout(()=>beep(1319,.14,'square',.05),70);};
+const sSwing=()=>beep(300,.08,'sawtooth',.04,120);
+const sHit  =()=>beep(200,.12,'square',.06,80);
+const sHurt =()=>beep(140,.22,'sawtooth',.07,60);
+const sCut  =()=>beep(500,.06,'triangle',.05,240);
+const sDoor =()=>{beep(392,.12,'square',.05);setTimeout(()=>beep(523,.12,'square',.05),110);setTimeout(()=>beep(659,.2,'square',.06),220);};
+const sWin  =()=>{[523,659,784,1047].forEach((f,i)=>setTimeout(()=>beep(f,.22,'square',.06),i*130));};
+const sHeart=()=>beep(660,.15,'triangle',.06,880);
+const sTalk =()=>beep(440,.07,'square',.04,520);
+const sBlip =()=>beep(700,.05,'square',.04);
+const sBuy  =()=>{[659,784,988,1319].forEach((f,i)=>setTimeout(()=>beep(f,.12,'square',.06),i*90));};
+const sFail =()=>{beep(220,.2,'sawtooth',.06,110);setTimeout(()=>beep(160,.3,'sawtooth',.06,80),180);};
+
+/* ============================== HELPERS ============================== */
+function tileAt(px,py){
+  const tx=Math.floor(px/T),ty=Math.floor(py/T);
+  if(tx<0||ty<0||tx>=MW||ty>=MH) return 1;
+  return map[ty][tx];
+}
+function collides(x,y,w,h){
+  return SOLID(tileAt(x,y))||SOLID(tileAt(x+w-1,y))||
+         SOLID(tileAt(x,y+h-1))||SOLID(tileAt(x+w-1,y+h-1));
+}
+function moveBox(o,dx,dy){
+  if(dx&&!collides(o.x+dx,o.y,o.w,o.h)) o.x+=dx;
+  if(dy&&!collides(o.x,o.y+dy,o.w,o.h)) o.y+=dy;
+}
+function overlap(a,b){
+  return a.x<b.x+b.w&&a.x+a.w>b.x&&a.y<b.y+b.h&&a.y+a.h>b.y;
+}
+function spawnSparks(x,y,c,n){
+  for(let i=0;i<(n||6);i++)
+    sparks.push({x,y,vx:(Math.random()-.5)*2.4,vy:(Math.random()-.5)*2.4-.6,
+                 t:20+Math.random()*14,c});
+}
+function spawnDrop(x,y){
+  const r=Math.random();
+  if(r<.55) drops.push({x,y,kind:'coin',t:0});
+  else if(r<.7) drops.push({x,y,kind:'heart',t:0});
+}
+function near(px,py,r){
+  const cx=player.x+player.w/2, cy=player.y+player.h/2;
+  return Math.hypot(cx-px,cy-py)<r;
+}
+
+/* ============================== WALLET DIALOGS ============================== */
+function openWalletDialog(){
+  if(dialog||state!=='play') return;
+  if(W.account){
+    openDialog(
+      ["POUCH — "+(W.name||"Wallet"),
+       shortAddr(W.account)+"  ·  Base",
+       "Balance: "+fmtEth(W.balanceWei)+" ETH"],
+      ["OK"], null);
+    refreshBalance();
+    return;
+  }
+  if(W.providers.length===0){
+    openDialog(
+      ["No wallet found in this browser.",
+       "Install a wallet extension, or open",
+       "this page inside your wallet's browser."],
+      ["OK"], null);
+    return;
+  }
+  const names=W.providers.slice(0,4).map(p=>(p.info&&p.info.name)||"Wallet");
+  openDialog(
+    ["Choose your coin pouch:"],
+    names.concat(["CANCEL"]),
+    (choice)=>{
+      if(choice==="CANCEL") return;
+      const entry=W.providers.find(p=>((p.info&&p.info.name)||"Wallet")===choice);
+      if(!entry) return;
+      const id=openDialog(["Connecting to "+choice+"…","Approve in your wallet."],[],null,true);
+      connectWith(entry).then(()=>{
+        updateDialog(id,
+          ["Connected! "+shortAddr(W.account),
+           "Balance: "+fmtEth(W.balanceWei)+" ETH on Base"],
+          ["OK"], null, false);
+        toast("Pouch linked: "+shortAddr(W.account));
+      }).catch(err=>{
+        updateDialog(id,
+          ["Couldn't connect.", trimErr(err)],
+          ["OK"], null, false);
+        sFail();
+      });
+    });
+}
+function trimErr(err){
+  let m=(err&&(err.message||err.toString()))||"Unknown error";
+  if(err&&err.code===4001) m="Request rejected in wallet.";
+  return m.length>40 ? m.slice(0,37)+"…" : m;
+}
+
+/* ============================== BUY FLOW ============================== */
+function openBuyDialog(i){
+  const item=SHOP_ITEMS[i];
+  const gecko=estTokensGecko(item.eth);
+  const id=openDialog(
+    [ item.name+" — "+item.eth+" ETH",
+      item.blurb,
+      "Checking the pool for a live quote…" ],
+    ["BUY","LEAVE"],
+    (choice)=>{ if(choice==="BUY") startPurchase(i,null); },
+    false);
+  // live quote (async — only touches the dialog if it's still this one)
+  kyberQuote(item.wei).then(q=>{
+    const out=Number(q.routeSummary.amountOut)/1e18;
+    const usd=q.routeSummary.amountOutUsd?(" ($"+Number(q.routeSummary.amountOutUsd).toFixed(2)+")"):"";
+    updateDialog(id,
+      [ item.name+" — "+item.eth+" ETH",
+        item.blurb,
+        "≈ "+fmtTokens(out)+" $BURGERS"+usd+" · max slip 5%" ],
+      ["BUY","LEAVE"],
+      (choice)=>{ if(choice==="BUY") startPurchase(i,q); },
+      false);
+  }).catch(()=>{
+    updateDialog(id,
+      [ item.name+" — "+item.eth+" ETH",
+        item.blurb,
+        gecko?("≈ "+fmtTokens(gecko)+" $BURGERS (est.)"):"Swaps at live pool price" ],
+      ["BUY","LEAVE"],
+      (choice)=>{ if(choice==="BUY") startPurchase(i,null); },
+      false);
+  });
+}
+
+function startPurchase(i, cachedQuote){
+  const item=SHOP_ITEMS[i];
+  // 1) must be connected
+  if(!W.account){
+    openDialog(
+      ["\"Coin first, hero!\"","Link your pouch to buy "+item.name+"."],
+      ["CONNECT","LEAVE"],
+      (c)=>{ if(c==="CONNECT") openWalletDialog(); });
+    return;
+  }
+  // 2) balance check (leave a little for gas)
+  try{
+    const need=BigInt(item.wei)+2000000000000000n; // + ~0.002 ETH cushion
+    if(W.balanceWei!=null && W.balanceWei<need){
+      openDialog(
+        ["\"Not enough ETH in your pouch!\"",
+         "You have "+fmtEth(W.balanceWei)+" ETH.",
+         item.name+" costs "+item.eth+" ETH + gas."],
+        ["OK"], null);
+      sFail(); return;
+    }
+  }catch(e){}
+  runSwap(i, cachedQuote);
+}
+
+async function runSwap(i, cachedQuote){
+  const item=SHOP_ITEMS[i];
+  txBusy=true;
+  const id=openDialog(["Grilling your order…","Fetching the freshest route."],[],null,true);
+  try{
+    const q = cachedQuote || await kyberQuote(item.wei);
+    updateDialog(id,["Grilling your order…","Confirm the swap in your wallet."],[],null,true);
+    await ensureBase(W.provider);
+    const built = await kyberBuild(q.routeSummary, W.account);
+    const txHash = await W.provider.request({
+      method:"eth_sendTransaction",
+      params:[{
+        from: W.account,
+        to:   built.routerAddress,
+        data: built.data,
+        value: toHexWei(item.wei)
+      }]
+    });
+    updateDialog(id,["Order on the grill!","Waiting for Base to confirm…",shortAddr(txHash)],[],null,true);
+    const rec = await waitReceipt(txHash);
+    txBusy=false;
+    refreshBalance();
+    if(rec && rec.status==="0x1"){
+      sBuy(); shakeT=8;
+      spawnSparks(player.x+6,player.y+6,'#ffd166',20);
+      const out=Number(q.routeSummary.amountOut)/1e18;
+      updateDialog(id,
+        ["\"ORDER UP!\" 🍔",
+         fmtTokens(out)+" $BURGERS served to your pouch.",
+         "100% of revenue feeds the hungry."],
+        ["NICE","BASESCAN"],
+        (c)=>{ if(c==="BASESCAN") window.open("https://basescan.org/tx/"+txHash,"_blank","noopener"); },
+        false);
+    } else if(rec){
+      sFail();
+      updateDialog(id,
+        ["The swap reverted on-chain.",
+         "Pool may have moved — try again."],
+        ["OK","BASESCAN"],
+        (c)=>{ if(c==="BASESCAN") window.open("https://basescan.org/tx/"+txHash,"_blank","noopener"); },
+        false);
+    } else {
+      updateDialog(id,
+        ["Still pending on Base…",
+         "Check your wallet or BaseScan."],
+        ["OK","BASESCAN"],
+        (c)=>{ if(c==="BASESCAN") window.open("https://basescan.org/tx/"+txHash,"_blank","noopener"); },
+        false);
+    }
+  }catch(err){
+    txBusy=false;
+    sFail();
+    const rejected = err && err.code===4001;
+    if(rejected){
+      updateDialog(id,["\"Changed your mind?\"","The griddle will wait for you."],["OK"],null,false);
+    } else {
+      // routing/build failure → offer the Uniswap fallback so a buy is ALWAYS possible
+      updateDialog(id,
+        ["The route slipped off the grill!",
+         trimErr(err),
+         "Buy on Uniswap instead?"],
+        ["UNISWAP","LEAVE"],
+        (c)=>{ if(c==="UNISWAP") window.open(uniswapURL(item.eth),"_blank","noopener"); },
+        false);
+    }
+  }
+}
+
+/* ============================== ACTION (A button) ============================== */
+function doAction(){
+  if(state!=='play') return;
+  if(scene==='shop'){ shopAction(); return; }
+  tryAttack();
+}
+const TABLES=[{tx:7,ty:10},{tx:14,ty:10},{tx:21,ty:10}];
+function shopAction(){
+  for(let i=0;i<3;i++){
+    const p=TABLES[i];
+    if(near(p.tx*T+8,p.ty*T+8,26)){ openBuyDialog(i); return; }
+  }
+  if(near(14.5*T+8,5*T+8,42)){
+    if(!W.account){
+      openDialog(
+        ["\"Welcome to the BUN BAZAAR, hero!\"",
+         "\"Real $BURGERS, swapped right here",
+         " at my counter. Link your pouch!\""],
+        ["CONNECT","LATER"],
+        (c)=>{ if(c==="CONNECT") openWalletDialog(); });
+    } else {
+      const est=estTokensGecko("1");
+      openDialog(
+        ["\"Good to see you, "+shortAddr(W.account)+"!\"",
+         est?("\"1 ETH ≈ "+fmtTokens(est)+" $BURGERS today.\""):"\"Fresh off the Base griddle!\"",
+         "\"Every buy feeds the hungry. 🍔\""],
+        ["OK"], null);
+    }
+    return;
+  }
+  toast("No spatula flipping in the shop!");
+}
+
+/* ============================== ATTACK ============================== */
+function tryAttack(){
+  if(player.atk>0) return;
+  player.atk=14; sSwing();
+  const hb=attackBox();
+  for(let ty=0;ty<MH;ty++)for(let tx=0;tx<MW;tx++){
+    if(map[ty][tx]!==4) continue;
+    const b={x:tx*T,y:ty*T,w:T,h:T};
+    if(overlap(hb,b)){
+      map[ty][tx]=0; sCut();
+      spawnSparks(tx*T+8,ty*T+8,'#6cc24a',8);
+      spawnDrop(tx*T+4,ty*T+4);
+    }
+  }
+  for(const e of bears){
+    if(e.hp>0&&overlap(hb,e)){
+      e.hp--; e.hurt=16; sHit();
+      const ang=Math.atan2(e.y-player.y,e.x-player.x);
+      e.kx=Math.cos(ang)*3; e.ky=Math.sin(ang)*3;
+      spawnSparks(e.x+7,e.y+7,'#ffd166',8);
+      if(e.hp<=0){
+        spawnSparks(e.x+7,e.y+7,'#ef4444',14);
+        drops.push({x:e.x+3,y:e.y+3,kind:'coin',t:0});
+        toast("Bear flipped! 📉→📈");
+      }
+    }
+  }
+}
+function attackBox(){
+  const r=14,p=player;
+  if(p.dir===0) return {x:p.x-2,y:p.y-r,w:p.w+4,h:r};
+  if(p.dir===2) return {x:p.x-2,y:p.y+p.h,w:p.w+4,h:r};
+  if(p.dir===3) return {x:p.x-r,y:p.y-2,w:r,h:p.h+4};
+  return {x:p.x+p.w,y:p.y-2,w:r,h:p.h+4};
+}
+
+/* ============================== UPDATE ============================== */
+function update(){
+  tick++;
+  if(shakeT>0) shakeT--;
+  msgs.forEach(m=>m.t--); msgs=msgs.filter(m=>m.t>0);
+  sparks.forEach(s=>{s.x+=s.vx;s.y+=s.vy;s.vy+=.06;s.t--;});
+  sparks=sparks.filter(s=>s.t>0);
+
+  if(state==='win'){ winT++; return; }
+  if(state!=='play') return;
+  if(dialog) return;
+
+  const p=player;
+  let dx=0,dy=0; const sp=1.5;
+  if(keys.up){dy=-sp;p.dir=0;} if(keys.down){dy=sp;p.dir=2;}
+  if(keys.left){dx=-sp;p.dir=3;} if(keys.right){dx=sp;p.dir=1;}
+  p.moving=!!(dx||dy);
+  if(p.atk>0){ p.atk--; dx*=.4; dy*=.4; }
+  moveBox(p,dx,dy);
+  if(p.moving&&tick%8===0) p.f^=1;
+  if(p.inv>0) p.inv--;
+
+  const centerTile=tileAt(p.x+p.w/2,p.y+p.h/2);
+
+  if(scene==='world'){
+    if(centerTile===10){ enterShop(); return; }
+    if(p.coins>=COIN_GOAL){
+      for(let ty=0;ty<MH;ty++)for(let tx=0;tx<MW;tx++)
+        if(map[ty][tx]===6){ map[ty][tx]=7; sDoor(); shakeT=14;
+          toast("The Griddle Shrine opens!"); }
+    }
+    if(centerTile===8&&p.coins>=COIN_GOAL){ state='win'; sWin(); }
+
+    for(const d of drops){
+      d.t++;
+      const box={x:d.x,y:d.y,w:9,h:9};
+      if(overlap(box,p)){
+        if(d.kind==='coin'){ p.coins++; sCoin(); spawnSparks(d.x+4,d.y+4,'#ffd166',6);
+          if(p.coins===COIN_GOAL) toast("25 $BURGERS! Head to the shrine!"); }
+        else { p.hp=Math.min(p.maxhp,p.hp+2); sHeart(); spawnSparks(d.x+4,d.y+4,'#ff5d8f',6); }
+        d.dead=true;
+      }
+    }
+    drops=drops.filter(d=>!d.dead);
+
+    for(const e of bears){
+      if(e.hp<=0) continue;
+      if(e.hurt>0){ e.hurt--; moveBox(e,e.kx,e.ky); e.kx*=.85; e.ky*=.85; continue; }
+      const distX=p.x-e.x, distY=p.y-e.y;
+      const dist=Math.hypot(distX,distY);
+      let vx=0,vy=0; const es=.55;
+      if(dist<90){
+        vx=Math.sign(distX)*es; vy=Math.sign(distY)*es;
+        e.dir=Math.abs(distX)>Math.abs(distY)?(distX>0?1:3):(distY>0?2:0);
+      }else{
+        e.t--;
+        if(e.t<=0){ e.dir=Math.floor(Math.random()*4); e.t=40+Math.random()*80; }
+        vx=[0,es,0,-es][e.dir]*.7; vy=[-es,0,es,0][e.dir]*.7;
+      }
+      const ox=e.x,oy=e.y;
+      moveBox(e,vx,vy);
+      if(e.x===ox&&e.y===oy) e.t=0;
+      if(p.inv<=0&&overlap(e,p)){
+        p.hp--; p.inv=60; sHurt(); shakeT=10;
+        const ang=Math.atan2(p.y-e.y,p.x-e.x);
+        moveBox(p,Math.cos(ang)*8,Math.sin(ang)*8);
+        spawnSparks(p.x+6,p.y+6,'#ef4444',10);
+        if(p.hp<=0){ state='dead'; }
+      }
+    }
+  } else {
+    // in the shop — walk down the rug and off the bottom to leave
+    if(centerTile===15 && p.y+p.h/2 > 18*T){ exitShop(); return; }
+  }
+}
+
+/* ============================== DRAWING ============================== */
+function px(x,y,w,h,c){ ctx.fillStyle=c; ctx.fillRect(x|0,y|0,w,h); }
+
+function drawTile(t,x,y){
+  switch(t){
+    case 0:
+      px(x,y,T,T,'#3f9b45');
+      if(((x/T)+(y/T))%2===0) px(x,y,T,T,'#44a34b');
+      px(x+3,y+5,1,1,'#2f7d38'); px(x+11,y+10,1,1,'#2f7d38'); px(x+7,y+13,1,1,'#5cbf63');
+      break;
+    case 1:
+      px(x,y,T,T,'#3f9b45');
+      px(x+2,y+11,12,4,'#274e2b');
+      px(x+6,y+9,4,5,'#6b4423');
+      px(x+1,y+1,14,10,'#1f6b2c');
+      px(x+2,y+0,12,4,'#2c8a3b');
+      px(x+3,y+3,4,3,'#3aa64c'); px(x+9,y+5,4,2,'#3aa64c');
+      break;
+    case 2:{
+      px(x,y,T,T,'#2456c9');
+      const w=Math.sin((tick/22)+(x+y)/24)>0;
+      if(w){ px(x+2,y+4,5,1,'#5f8df0'); px(x+9,y+11,4,1,'#5f8df0'); }
+      else { px(x+8,y+5,5,1,'#4a78e6'); px(x+3,y+12,4,1,'#4a78e6'); }
+      break;}
+    case 3:
+      px(x,y,T,T,'#d9b271');
+      px(x+2,y+3,2,2,'#c39c5c'); px(x+10,y+9,3,2,'#c39c5c'); px(x+6,y+13,2,1,'#e7c98f');
+      break;
+    case 4:
+      px(x,y,T,T,'#3f9b45');
+      px(x+2,y+4,12,10,'#2d8f3f');
+      px(x+3,y+2,10,4,'#37a54c');
+      px(x+4,y+5,3,2,'#5cc36b'); px(x+9,y+8,3,2,'#5cc36b');
+      px(x+7,y+6,2,2,'#e8a33d');
+      break;
+    case 5:
+      px(x,y,T,T,'#7d8496');
+      px(x,y,T,2,'#9aa1b3'); px(x,y+T-2,T,2,'#565c6c');
+      px(x+4,y+5,3,2,'#565c6c'); px(x+10,y+9,3,2,'#565c6c');
+      break;
+    case 6:
+      px(x,y,T,T,'#565c6c');
+      px(x+2,y+2,12,14,'#3a2b1c');
+      px(x+3,y+3,10,12,'#5a4026');
+      px(x+6,y+7,4,4,'#ffd166');
+      px(x+7,y+9,2,3,'#3a2b1c');
+      break;
+    case 7:
+      px(x,y,T,T,'#565c6c');
+      px(x+2,y+2,12,14,'#0c0f16');
+      if(tick%30<15) px(x+6,y+6,4,4,'rgba(255,209,102,.65)');
+      break;
+    case 8:
+      px(x,y,T,T,'#c9cfdd');
+      px(x,y,T,1,'#eef1f7'); px(x,y+8,T,1,'#aab0c0'); px(x+8,y,1,T,'#aab0c0');
+      break;
+    case 9:
+      px(x,y,T,T,'#3f9b45');
+      px(x+6,y+9,1,4,'#2f7d38');
+      px(x+4,y+5,5,4,'#ff5d8f'); px(x+6,y+6,1,2,'#ffd166');
+      break;
+    case 10:
+      px(x,y,T,T,'#6b4423');
+      px(x+2,y+3,12,13,'#1a1208');
+      px(x+3,y+4,10,12,'#2b1d0e');
+      px(x+6,y-1,4,1,'#3a2b1c');
+      px(x+4,y+0,8,3,'#ffd166');
+      px(x+5,y+1,6,1,'#e8a33d');
+      if(tick%40<20) px(x+13,y+2,2,2,'#fff');
+      break;
+    case 11:
+      px(x,y,T,T,'#6b4423');
+      px(x,y,T,2,'#8a5a2b');
+      px(x,y+7,T,1,'#4a2f16'); px(x,y+13,T,1,'#4a2f16');
+      px(x+5,y+3,1,4,'#4a2f16'); px(x+11,y+9,1,4,'#4a2f16');
+      break;
+    case 12:{ // shop floor — warm orange checker, classic 16-bit interior
+      const alt=((x/T)+(y/T))%2===0;
+      px(x,y,T,T, alt?'#c8813c':'#b7712e');
+      px(x,y,T,1,'#d99552'); px(x,y,1,T,'#d99552');
+      px(x,y+T-1,T,1,'#8f571f'); px(x+T-1,y,1,T,'#8f571f');
+      if(alt) px(x+6,y+6,4,4,'#c07430');
+      break;}
+    case 13: // shop wall — big dark stone blocks
+      px(x,y,T,T,'#2b3a3d');
+      px(x,y,T,1,'#3d5054'); px(x,y+8,T,1,'#1c282a');
+      px(x+8,y+1,1,7,'#1c282a'); px(x+3,y+9,1,7,'#1c282a'); px(x+12,y+9,1,7,'#1c282a');
+      px(x+1,y+1,6,1,'#42585c'); px(x+9,y+9,6,1,'#42585c');
+      break;
+    case 14: // counter — heavy wood with lit top
+      px(x,y,T,T,'#4a2f16');
+      px(x,y,T,5,'#e8a33d');
+      px(x,y+5,T,2,'#c98a1e');
+      px(x,y+7,T,1,'#2b1d0e');
+      px(x+2,y+9,2,5,'#5a4026'); px(x+12,y+9,2,5,'#5a4026');
+      px(x+6,y+10,4,3,'#3a2b1c');
+      break;
+    case 15: // red entry rug with gold trim
+      px(x,y,T,T,'#b7712e');
+      px(x+1,y,14,T,'#8f1f1f');
+      px(x+2,y,12,T,'#c22b2b');
+      px(x+2,y,1,T,'#ffd166'); px(x+13,y,1,T,'#ffd166');
+      px(x+6,y+4,4,2,'#8f1f1f'); px(x+6,y+10,4,2,'#8f1f1f');
+      break;
+    case 16: // little wooden display table
+      px(x,y,T,T, ((x/T)+(y/T))%2===0?'#c8813c':'#b7712e');
+      px(x+2,y+12,3,3,'#3a2b1c'); px(x+11,y+12,3,3,'#3a2b1c');
+      px(x+1,y+6,14,7,'#8a5a2b');
+      px(x+0,y+5,16,3,'#a8743a');
+      px(x+0,y+5,16,1,'#c48a48');
+      break;
+    case 17:{ // wall torch
+      px(x,y,T,T,'#2b3a3d');
+      px(x,y,T,1,'#3d5054'); px(x,y+8,T,1,'#1c282a');
+      px(x+7,y+8,2,6,'#5a4026');
+      px(x+6,y+6,4,3,'#8a5a2b');
+      const f=(tick>>3)%2;
+      px(x+6,y+1+f,4,5,'#ff8c1a');
+      px(x+7,y+2+f,2,3,'#ffd166');
+      break;}
+  }
+}
+
+function drawPlayer(x,y){
+  const p=player;
+  if(p.inv>0&&(tick>>2)%2===0) return;
+  const step=p.moving?p.f:0;
+  px(x+2+(step?1:0),y+11,3,3,'#7a4a21');
+  px(x+8-(step?1:0),y+11,3,3,'#7a4a21');
+  px(x+1,y+8,11,3,'#d99a37');
+  px(x+1,y+6,11,2,'#6e421d');
+  px(x,y+5,13,2,'#6cc24a');
+  px(x-1,y+6,2,1,'#6cc24a'); px(x+12,y+6,2,1,'#6cc24a');
+  px(x+2,y+7,2,2,'#ffcc4d'); px(x+9,y+7,2,2,'#ffcc4d');
+  px(x+1,y+1,11,5,'#e8a33d');
+  px(x+2,y+0,9,2,'#f0b45a');
+  px(x+3,y+2,1,1,'#fff3d6'); px(x+7,y+1,1,1,'#fff3d6'); px(x+10,y+3,1,1,'#fff3d6');
+  if(p.dir!==0){
+    const ex=p.dir===3?-2:p.dir===1?2:0;
+    px(x+3+ex,y+3,2,2,'#1a1408'); px(x+8+ex,y+3,2,2,'#1a1408');
+    px(x+4+ex,y+3,1,1,'#fff');    px(x+9+ex,y+3,1,1,'#fff');
+  }
+  if(p.atk>0){
+    const hd='#8a5a2b';
+    if(p.dir===0){ px(x+5,y-10,3,8,hd); px(x+3,y-14,7,5,'#c0c6d4'); }
+    if(p.dir===2){ px(x+5,y+14,3,8,hd); px(x+3,y+21,7,5,'#c0c6d4'); }
+    if(p.dir===3){ px(x-10,y+5,8,3,hd); px(x-15,y+3,5,7,'#c0c6d4'); }
+    if(p.dir===1){ px(x+14,y+5,8,3,hd); px(x+22,y+3,5,7,'#c0c6d4'); }
+  }
+}
+
+function drawBear(e,x,y){
+  if(e.hp<=0) return;
+  const hurt=e.hurt>0&&(tick>>2)%2===0;
+  const body=hurt?'#ff8f8f':'#6b4423';
+  const belly=hurt?'#ffb3b3':'#8a5a2b';
+  const hop=(Math.sin(tick/6+e.x)>0)?1:0;
+  px(x+1,y-2+hop,4,4,body); px(x+9,y-2+hop,4,4,body);
+  px(x,y+hop,14,12,body);
+  px(x+3,y+5+hop,8,6,belly);
+  px(x+2,y+2+hop,3,1,'#1a0f05'); px(x+9,y+2+hop,3,1,'#1a0f05');
+  px(x+3,y+3+hop,2,2,'#e8362d'); px(x+9,y+3+hop,2,2,'#e8362d');
+  px(x+5,y+6+hop,4,3,'#4a2f16');
+  px(x+4,y+9+hop,1,1,'#e8362d'); px(x+5,y+10+hop,1,1,'#e8362d');
+  px(x+6,y+9+hop,1,1,'#e8362d'); px(x+7,y+10+hop,1,1,'#e8362d'); px(x+8,y+11+hop,1,1,'#e8362d');
+}
+
+function drawCoin(d,x,y){
+  const ph=Math.floor(tick/8+d.x)%4;
+  const w=[9,6,3,6][ph], ox=(9-w)/2;
+  const bob=Math.sin((tick+d.x)/12)*1.5;
+  y+=bob;
+  px(x+ox,y,w,9,'#c98a1e');
+  px(x+ox,y,w,8,'#ffd166');
+  if(ph===0){ px(x+2,y+2,5,1,'#e8a33d'); px(x+2,y+4,5,1,'#8a5a2b'); px(x+2,y+6,5,1,'#e8a33d'); }
+  if(tick%40<4) px(x+8,y-1,2,2,'#fff');
+}
+function drawHeart(d,x,y){
+  const bob=Math.sin((tick+d.x)/10)*1.5; y+=bob;
+  px(x+1,y+1,3,3,'#ff5d8f'); px(x+5,y+1,3,3,'#ff5d8f');
+  px(x+1,y+3,7,3,'#ff5d8f'); px(x+2,y+6,5,2,'#e23a6d'); px(x+3,y+8,3,1,'#e23a6d');
+  px(x+2,y+2,1,1,'#ffc2d6');
+}
+
+/* ---- shop sprites ---- */
+function drawShopkeeper(){
+  const x=14.5*T, y=3.4*T;
+  const bob=Math.sin(tick/20)*1;
+  px(x+1,y-6+bob,11,4,'#f5f0e6');
+  px(x+0,y-3+bob,13,2,'#e2dccb');
+  px(x+1,y+1+bob,11,4,'#e8a33d');
+  px(x,y+5+bob,13,2,'#6cc24a');
+  px(x+1,y+7+bob,11,2,'#6e421d');
+  px(x+1,y+9+bob,11,3,'#d99a37');
+  if(tick%140<130){
+    px(x+3,y+2+bob,2,2,'#1a1408'); px(x+8,y+2+bob,2,2,'#1a1408');
+    px(x+4,y+2+bob,1,1,'#fff');    px(x+9,y+2+bob,1,1,'#fff');
+  } else {
+    px(x+3,y+3+bob,2,1,'#1a1408'); px(x+8,y+3+bob,2,1,'#1a1408');
+  }
+}
+function drawShopItem(i){
+  const p=TABLES[i];
+  const x=p.tx*T+3, y=p.ty*T-6+Math.sin(tick/14+i*2)*1.5;
+  if(i===0){
+    px(x+1,y+1,8,8,'#c98a1e'); px(x+1,y,8,8,'#ffd166');
+    px(x+3,y+2,4,1,'#e8a33d'); px(x+3,y+4,4,1,'#8a5a2b'); px(x+3,y+6,4,1,'#e8a33d');
+  } else if(i===1){
+    px(x,y+5,10,5,'#c98a1e'); px(x,y+4,10,5,'#ffd166');
+    px(x+1,y+1,8,5,'#e8b23d'); px(x+1,y,8,4,'#ffe08a');
+  } else {
+    px(x-2,y+7,14,3,'#d99a37');
+    px(x-2,y+5,14,2,'#6e421d');
+    px(x-3,y+4,16,2,'#6cc24a');
+    px(x-2,y-1,14,5,'#ffd166');
+    px(x-1,y-2,12,2,'#ffe08a');
+    px(x+1,y+0,1,1,'#fff'); px(x+6,y+1,1,1,'#fff'); px(x+10,y+0,1,1,'#fff');
+  }
+  if((tick+i*20)%50<5) px(x+10,y-3,2,2,'#fff');
+}
+function drawShopOverlay(){
+  // warm torch-light vignette
+  const g=ctx.createRadialGradient(240,170,80,240,170,320);
+  g.addColorStop(0,'rgba(0,0,0,0)');
+  g.addColorStop(1,'rgba(6,4,10,.45)');
+  ctx.fillStyle=g; ctx.fillRect(0,0,480,352);
+
+  ctx.font='bold 9px monospace'; ctx.textAlign='center'; ctx.textBaseline='top';
+  for(let i=0;i<3;i++){
+    const p=TABLES[i];
+    ctx.fillStyle='#0c0f16';
+    const label=SHOP_ITEMS[i].eth+' ETH';
+    const w=ctx.measureText(label).width+8;
+    ctx.fillRect(p.tx*T+8-w/2, p.ty*T+20, w, 12);
+    ctx.strokeStyle='#ffd166'; ctx.lineWidth=1;
+    ctx.strokeRect(p.tx*T+8-w/2+.5, p.ty*T+20.5, w-1, 11);
+    ctx.fillStyle='#ffd166';
+    ctx.fillText(label, p.tx*T+8, p.ty*T+23);
+  }
+  ctx.fillStyle='#ffd166'; ctx.font='bold 11px monospace';
+  ctx.fillText('· BUN BAZAAR ·', 15*T, 1.4*T);
+  ctx.fillStyle='#9db4b8'; ctx.font='bold 8px monospace';
+  const est=estTokensGecko("1");
+  ctx.fillText(est?('1 ETH ≈ '+fmtTokens(est)+' $BURGERS · LIVE POOL')
+                  :'REAL $BURGERS · SWAPPED ON BASE', 15*T, 2.15*T);
+  ctx.textAlign='left';
+  for(let i=0;i<3;i++){
+    const p=TABLES[i];
+    if(near(p.tx*T+8,p.ty*T+8,26)&&!dialog&&tick%40<28){
+      ctx.fillStyle='#fff'; ctx.font='bold 9px monospace'; ctx.textAlign='center';
+      ctx.fillText(('ontouchstart' in window)?'A':'SPACE', p.tx*T+8, p.ty*T-18);
+      ctx.textAlign='left';
+    }
+  }
+}
+
+/* ---- HUD / dialog / screens ---- */
+function drawHUD(){
+  px(0,0,480,HUD_H,'#10131c');
+  px(0,HUD_H-2,480,2,'#2a3350');
+  for(let i=0;i<3;i++){
+    const hx=10+i*18, hy=9;
+    const filled=player.hp-i*2;
+    drawHeartUI(hx,hy,filled>=2?2:filled===1?1:0);
+  }
+  const cx=150;
+  px(cx,8,12,12,'#c98a1e'); px(cx,8,12,11,'#ffd166');
+  px(cx+2,10,8,2,'#e8a33d'); px(cx+2,13,8,2,'#8a5a2b'); px(cx+2,16,8,1,'#e8a33d');
+  ctx.fillStyle='#f5f0e6'; ctx.font='bold 12px monospace'; ctx.textBaseline='top';
+  ctx.fillText('×'+String(player.coins).padStart(2,'0'), cx+17, 10);
+  // wallet status, right side
+  ctx.font='bold 10px monospace';
+  let label;
+  if(W.account){
+    ctx.fillStyle='#6cc24a';
+    label='◉ '+shortAddr(W.account)+'  Ξ'+fmtEth(W.balanceWei);
+  } else {
+    ctx.fillStyle='#8f9bbd';
+    label=('ontouchstart' in window)?'💳 TAP TO LINK POUCH':'○ PRESS C TO LINK POUCH';
+  }
+  ctx.fillText(label, 476-ctx.measureText(label).width, 12);
+}
+function drawHeartUI(x,y,fill){
+  const base=fill===0?'#3a3f52':'#e23a6d';
+  px(x+1,y,4,4,base); px(x+7,y,4,4,base);
+  px(x,y+2,12,4,base); px(x+2,y+6,8,3,base); px(x+4,y+9,4,2,base);
+  if(fill===1){ px(x+6,y,6,11,'#3a3f52'); px(x+6,y+2,6,4,'#3a3f52'); }
+  if(fill>0){ px(x+2,y+1,2,2,'#ff9ab8'); }
+}
+function drawMsgs(){
+  if(!msgs.length||dialog) return;
+  const m=msgs[msgs.length-1];
+  ctx.font='bold 11px monospace';
+  const w=ctx.measureText(m.text).width+20;
+  const x=(480-w)/2, y=HUD_H+8;
+  ctx.fillStyle='rgba(12,15,22,.85)'; ctx.fillRect(x,y,w,20);
+  ctx.strokeStyle='#e8a33d'; ctx.lineWidth=1; ctx.strokeRect(x+.5,y+.5,w-1,19);
+  ctx.fillStyle='#ffd166'; ctx.textBaseline='top'; ctx.fillText(m.text,x+10,y+5);
+}
+function drawDialog(){
+  if(!dialog) return;
+  const vertical=dialog.options.length>2;
+  const bh=vertical?(60+dialog.options.length*14):96;
+  const bw=440, bx=20, by=352-bh-14;
+  ctx.fillStyle='rgba(8,10,18,.94)'; ctx.fillRect(bx,by,bw,bh);
+  ctx.strokeStyle='#f5f0e6'; ctx.lineWidth=2; ctx.strokeRect(bx+2,by+2,bw-4,bh-4);
+  ctx.strokeStyle='#e8a33d'; ctx.lineWidth=1; ctx.strokeRect(bx+5.5,by+5.5,bw-11,bh-11);
+  ctx.font='bold 11px monospace'; ctx.textBaseline='top';
+  dialog.lines.forEach((ln,i)=>{
+    ctx.fillStyle=i===0?'#ffd166':'#f5f0e6';
+    ctx.fillText(ln,bx+16,by+13+i*14);
+  });
+  if(dialog.busy){
+    const dots='.'.repeat(1+(Math.floor(tick/20)%3));
+    ctx.fillStyle='#6cc24a';
+    ctx.fillText('▶ '+dots, bx+16, by+bh-22);
+    return;
+  }
+  if(vertical){
+    const oy=by+13+dialog.lines.length*14+4;
+    dialog.options.forEach((opt,i)=>{
+      const sel=i===dialog.sel;
+      ctx.fillStyle=sel?'#6cc24a':'#8f9bbd';
+      ctx.fillText((sel?'▶':'  ')+opt, bx+24, oy+i*14);
+    });
+  } else {
+    const oy=by+bh-22;
+    let ox=bx+16;
+    dialog.options.forEach((opt,i)=>{
+      const sel=i===dialog.sel;
+      ctx.fillStyle=sel?'#6cc24a':'#8f9bbd';
+      const cur=sel?'▶':' ';
+      ctx.fillText(cur+opt,ox,oy);
+      ox+=ctx.measureText(cur+opt).width+26;
+    });
+  }
+}
+function drawEnd(){
+  ctx.fillStyle='rgba(6,8,13,.78)'; ctx.fillRect(0,HUD_H,480,VH);
+  ctx.textAlign='center'; ctx.textBaseline='top';
+  if(state==='win'){
+    if(winT%3===0) sparks.push({x:player.x-240+Math.random()*480,y:player.y-160,
+      vx:(Math.random()-.5),vy:1+Math.random()*1.5,
+      t:120,c:['#ffd166','#0052ff','#6cc24a','#ff5d8f'][Math.floor(Math.random()*4)]});
+    ctx.fillStyle='#ffd166'; ctx.font='bold 26px monospace';
+    ctx.fillText('THE GOLDEN GRIDDLE!',240,132);
+    ctx.fillStyle='#f5f0e6'; ctx.font='bold 13px monospace';
+    ctx.fillText('The Bun Kingdom is saved.',240,172);
+    ctx.fillStyle='#6cc24a';
+    ctx.fillText('Every $BURGERS goes to charity. 🍔',240,194);
+    ctx.fillStyle='#8f9bbd'; ctx.font='bold 11px monospace';
+    ctx.fillText(('ontouchstart' in window)?'TAP TO PLAY AGAIN':'PRESS ENTER TO PLAY AGAIN',240,234);
+  } else {
+    ctx.fillStyle='#ef4444'; ctx.font='bold 28px monospace';
+    ctx.fillText('GAME OVER',240,144);
+    ctx.fillStyle='#f5f0e6'; ctx.font='bold 12px monospace';
+    ctx.fillText('The bear market got you...',240,182);
+    ctx.fillStyle='#8f9bbd'; ctx.font='bold 11px monospace';
+    ctx.fillText(('ontouchstart' in window)?'TAP TO TRY AGAIN':'PRESS ENTER TO TRY AGAIN',240,216);
+  }
+  ctx.textAlign='left';
+}
+
+function draw(){
+  ctx.clearRect(0,0,480,352);
+  const worldW=MW*T, worldH=MH*T;
+  const camX=worldW<=VW?(worldW-VW)/2:Math.max(0,Math.min(worldW-VW,player.x+8-VW/2));
+  const camY=worldH<=VH?(worldH-VH)/2:Math.max(0,Math.min(worldH-VH,player.y+8-VH/2));
+  let sx=0,sy=0;
+  if(shakeT>0){ sx=(Math.random()-.5)*4; sy=(Math.random()-.5)*4; }
+
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0,HUD_H,480,VH); ctx.clip();
+  if(scene==='shop'){ ctx.fillStyle='#0c0f16'; ctx.fillRect(0,HUD_H,480,VH); }
+  ctx.translate(-camX+sx,-camY+HUD_H+sy);
+
+  const tx0=Math.floor(Math.max(0,camX)/T), ty0=Math.floor(Math.max(0,camY)/T);
+  for(let ty=ty0;ty<=ty0+VH/T;ty++){
+    for(let tx=tx0;tx<=tx0+VW/T;tx++){
+      if(tx<0||ty<0||tx>=MW||ty>=MH) continue;
+      drawTile(map[ty][tx],tx*T,ty*T);
+    }
+  }
+  if(scene==='world'){
+    for(const d of drops){ d.kind==='coin'?drawCoin(d,d.x,d.y):drawHeart(d,d.x,d.y); }
+    for(const e of bears){ drawBear(e,e.x,e.y); }
+  } else {
+    drawShopkeeper();
+    for(let i=0;i<3;i++) drawShopItem(i);
+  }
+  drawPlayer(player.x,player.y);
+  for(const s of sparks){ px(s.x,s.y,2,2,s.c); }
+  if(scene==='shop') drawShopOverlay();
+  ctx.restore();
+
+  drawHUD();
+  drawMsgs();
+  drawDialog();
+  if(state!=='play') drawEnd();
+}
+
+/* ============================== LOOP ============================== */
+reset();
+function loop(){ update(); draw(); requestAnimationFrame(loop); }
+loop();
+// keep wallet balance fresh
+setInterval(()=>{ if(W.account) refreshBalance(); }, 30000);
+})();
+</script>
+</body>
+</html>
